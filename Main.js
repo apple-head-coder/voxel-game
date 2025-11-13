@@ -22,7 +22,7 @@ const BLOCK_ID = {}; // { name: id }
 const MIN_HEIGHT = 0;
 const MAX_HEIGHT = 64;
 const CHUNK_SIZE = 16;
-const MAX_GENERATE_RADIUS = 5;
+const MAX_GENERATE_RADIUS = getChunkDistance();;
 const TERRAIN_HEIGHT = 30; // this will affect spawn height as well
 const TERRAIN_INTENSITIES = [24, 8, 4, 2, 1];
 const TERRAIN_RESOLUTIONS = [0.003, 0.01, 0.02, 0.05, 0.1];
@@ -1071,6 +1071,26 @@ function updateDebug() {
 function getUserSeed() {
   seed = prompt("Enter a seed or leave blank for a random one");
   if (!seed) seed = Math.floor(Math.random() * 1000000000000000).toString();
+}
+function getChunkDistance() {
+  const defaultValue = 5;
+  let userInput = prompt("Enter chunk distance (integer only, it will default if its blank or not an integer, and be careful of lag)");
+
+  if (userInput === null || userInput.trim() === "") {
+    return defaultValue;
+  }
+
+  let numberValue = parseFloat(userInput);
+
+  if (isNaN(numberValue)) {
+    return defaultValue;
+  }
+
+  if (numberValue !== parseInt(userInput, 10)) {
+    return defaultValue;
+  }
+
+  return parseInt(numberValue, 10);
 }
 
 try {
