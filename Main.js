@@ -22,9 +22,9 @@ const BLOCK_ID = {}; // { name: id }
 const MIN_HEIGHT = 0;
 const MAX_HEIGHT = 64;
 const CHUNK_SIZE = 16;
-const MAX_GENERATE_RADIUS = 5;
-const LAND_INTENSITY = 0.3;
-const WORLD_DEPTH = 30; // this will affect spawn height as well
+const TERRAIN_HEIGHT = 30; // this will affect spawn height as well
+const TERRAIN_INTENSITIES = [24, 8, 4, 2, 1];
+const TERRAIN_RESOLUTIONS = [0.003, 0.01, 0.02, 0.05, 0.1];
 const CUBE_SIZE = 1;
 
 const PLAYER_SPEED = 6;
@@ -46,6 +46,9 @@ let raycaster, mouse;
 const chunks = {};
 const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false });
 const textureLoader = new THREE.TextureLoader();
+let chunkRadius = 5;
+let seed;
+let terrainHeightNoise;
 
 // Player
 const moveControls = {
@@ -56,7 +59,7 @@ const moveControls = {
   up: false,
   down: false,
 };
-let position = new THREE.Vector3(0, WORLD_DEPTH + 1, 0);
+let position = new THREE.Vector3(0, TERRAIN_HEIGHT + 1, 0);
 let rotation = new THREE.Euler();
 let velocity = new THREE.Vector3();
 let canJump = false;
@@ -65,6 +68,8 @@ let currentBlock = 0; // grass
 // Misc
 let lastFrameTime;
 let fps;
+
+/*************** UTILITY ***************/
 
 /** Get the key of a block from xyz coords */
 function key(x, y, z) {
@@ -79,6 +84,11 @@ function chunkKey(cx, cz) {
 /** Convert a block or chunk key to array */
 function keyToArray(k) {
   return k.split(",").map(n => parseInt(n));
+}
+
+/** Get the chunk's generation rng from xz coords */
+function chunkRng(cx, cz) {
+  return new Alea(`${seed},${cx},${cz}`);
 }
 
 /** Convert a number 0-63 to its base64 representation character */
@@ -131,9 +141,10 @@ function init() {
   controls = new THREE.PointerLockControls(camera, document.body);
   scene.add(controls.getObject());
 
-  // Generate block types
+  // Generate stuff
   generateBlockIDs();
   generateBlockMaterials();
+  initRandom();
 
   // Event listeners
   window.addEventListener("resize", onWindowResize, false);
@@ -148,6 +159,12 @@ function generateBlockIDs() {
   BLOCK_TYPES.forEach((type, i) => {
     BLOCK_ID[type.name] = i;
   });
+}
+
+/** Initialize all random functions from the global seed */
+function initRandom() {
+  const rng = new Alea(seed);
+  generateNoiseFunction(rng());
 }
 
 /** Generate materials for each block type */
@@ -175,6 +192,23 @@ function generateBlockMaterials() {
       blockType.materials.push(material);
     }
   }
+}
+
+/** Generate the noise function */
+function generateNoiseFunction(noiseSeed) {
+  // Generate individual functions
+  const rng = new Alea(noiseSeed);
+  const noiseFuncs = TERRAIN_INTENSITIES.map(_ => createNoise2D(new Alea(rng())));
+
+  // Set the combined function
+  terrainHeightNoise = (x, y) =>
+    noiseFuncs
+      .map((noise, i) => {
+        const intensity = TERRAIN_INTENSITIES[i];
+        const resolution = TERRAIN_RESOLUTIONS[i];
+        return noise(x * resolution, y * resolution) * intensity;
+      })
+      .reduce((total, n) => total + n, 0);
 }
 
 /** Function called every frame for processing and rendering */
@@ -569,12 +603,11 @@ function removeBlock(x, y, z) {
 }
 
 /** Generate a tree with root at the specified location */
-function generateTree(x, y, z) {
+function generateTree(x, y, z, rng) {
   // Randomly generate trunk height
   const minTrunkHeight = 6;
   const maxTrunkHeight = 8;
-  const trunkHeight =
-    minTrunkHeight + Math.floor(Math.random() * (maxTrunkHeight - minTrunkHeight + 1));
+  const trunkHeight = minTrunkHeight + Math.floor(rng() * (maxTrunkHeight - minTrunkHeight + 1));
 
   // Build the trunk
   for (let i = 0; i < trunkHeight; i++) {
@@ -597,7 +630,7 @@ function generateTree(x, y, z) {
 
         // Create a slightly irregular sphere shape by adding randomness
         const generateChance = 1 - (squareDist / squareCanopyRadius) * foliageFalloff;
-        if (squareDist < squareCanopyRadius && Math.random() < generateChance) {
+        if (squareDist < squareCanopyRadius && rng() < generateChance) {
           placeBlock(BLOCK_ID.leaves, x + lx, canopyCenterY + ly, z + lz);
         }
       }
@@ -630,17 +663,23 @@ function generateChunk(cx, cz) {
 
   const startX = cx * CHUNK_SIZE;
   const startZ = cz * CHUNK_SIZE;
+  const rng = chunkRng(cx, cz);
 
   // Generate terrain
   for (let i = 0; i < CHUNK_SIZE; i++) {
     for (let j = 0; j < CHUNK_SIZE; j++) {
+      // Calculate coordinates
       const wx = startX + i;
       const wz = startZ + j;
-      const v = Math.abs(Math.sin(wx * LAND_INTENSITY) + Math.cos(wz * LAND_INTENSITY));
-      const h = Math.floor(WORLD_DEPTH + 10 * LAND_INTENSITY * v);
-      for (let y = 0; y < h; y++) {
-        const top = y === h - 1;
-        const type = top ? BLOCK_ID.grass : y >= h - 3 ? BLOCK_ID.dirt : BLOCK_ID.stone;
+
+      // Use noise to generate height
+      const noise = terrainHeightNoise(wx, wz);
+      const height = Math.floor(TERRAIN_HEIGHT + noise);
+
+      // Place blocks
+      for (let y = 0; y < height; y++) {
+        const top = y === height - 1;
+        const type = top ? BLOCK_ID.grass : y >= height - 3 ? BLOCK_ID.dirt : BLOCK_ID.stone;
         placeBlock(type, wx, y, wz);
       }
     }
@@ -649,10 +688,10 @@ function generateChunk(cx, cz) {
   // Generate trees
   // 3 tree spawning attempts per chunk with 35% success for each
   for (let t = 0; t < 3; t++) {
-    if (Math.random() < 0.35) {
+    if (rng() < 0.35) {
       // Randomly generate tree location
-      const treeX = startX + Math.floor(Math.random() * CHUNK_SIZE);
-      const treeZ = startZ + Math.floor(Math.random() * CHUNK_SIZE);
+      const treeX = startX + Math.floor(rng() * CHUNK_SIZE);
+      const treeZ = startZ + Math.floor(rng() * CHUNK_SIZE);
       const topY = findTopBlockY(treeX, treeZ);
 
       // Place tree if valid
@@ -660,7 +699,7 @@ function generateChunk(cx, cz) {
         const k = key(treeX, topY, treeZ);
         const rootBlock = chunks[ck].blocks[k];
 
-        if (rootBlock.id == BLOCK_ID.grass) generateTree(treeX, topY + 1, treeZ);
+        if (rootBlock.id == BLOCK_ID.grass) generateTree(treeX, topY + 1, treeZ, rng);
       }
     }
   }
@@ -701,14 +740,14 @@ function generateChunksAroundPlayer() {
 
     const [cx, cz] = keyToArray(ck);
     // Check if distance is too far
-    if (Math.abs(cx - pcx) > MAX_GENERATE_RADIUS || Math.abs(cz - pcz) > MAX_GENERATE_RADIUS) {
+    if (Math.abs(cx - pcx) > chunkRadius || Math.abs(cz - pcz) > chunkRadius) {
       unloadChunk(chunk);
     }
   }
 
   // Generate nearby chunks with radius in a square formation
-  for (let dx = -MAX_GENERATE_RADIUS; dx <= MAX_GENERATE_RADIUS; dx++) {
-    for (let dz = -MAX_GENERATE_RADIUS; dz <= MAX_GENERATE_RADIUS; dz++) {
+  for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
+    for (let dz = -chunkRadius; dz <= chunkRadius; dz++) {
       generateChunk(pcx + dx, pcz + dz);
     }
   }
@@ -811,6 +850,8 @@ function generateChunkMesh(chunk) {
   // Create final mesh
   chunk.mesh = new THREE.Mesh(geometry, materials);
 }
+
+/*************** SAVING & LOADING ***************/
 
 /** Generate a save code for the current world */
 function generateSaveCode() {
@@ -1024,7 +1065,28 @@ function updateDebug() {
   `;
 }
 
+/*************** MISC ***************/
+
+/** Get a seed from the user */
+function getUserSeed() {
+  seed = prompt("Enter a seed or leave blank for a random one");
+  if (!seed) seed = Math.floor(Math.random() * 1000000000000000).toString();
+}
+
+/** Get the chunk distance from the user */
+function getUserChunkRadius() {
+  let userInput = prompt("Enter chunk radius (integer) or leave blank for default");
+  if (!userInput) return;
+
+  let numberValue = parseInt(userInput);
+  if (!numberValue) return;
+
+  chunkRadius = numberValue;
+}
+
 try {
+  getUserChunkRadius();
+  getUserSeed();
   setupUI();
   init();
   generateChunksAroundPlayer();
