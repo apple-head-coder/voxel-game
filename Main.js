@@ -41,7 +41,7 @@ let raycaster, mouse;
 
 // World & world gen
 // store chunks by key
-// { "cx,cz": { blocks: [{ id }] }, mesh, updateMesh, loaded } }
+// { "cx,cz": { blocks: [{ id }] }, mesh, updateMesh, loaded, modified } }
 const chunks = {};
 const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false });
 const textureLoader = new THREE.TextureLoader();
@@ -105,7 +105,7 @@ function base64char(num) {
   if (num < 26) return String.fromCharCode(num + 65); // A-Z: 0-25
   if (num < 52) return String.fromCharCode(num + 71); // a-z: 26-51
   else if (num < 62) return String.fromCharCode(num - 4); // 0-9: 52-61
-  else if (num == 62) return "+"; // +: 62
+  else if (num === 62) return "+"; // +: 62
   else return "/"; // /: 63
 }
 
@@ -340,7 +340,6 @@ function correctCollision(moveDir, blockBB) {
  * returning false if not
  */
 function isPlayerColliding() {
-  const blockDim = new THREE.Vector3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
   const playerBB = getPlayerBB();
 
   // Bounds for blocks that the player can be colliding with
@@ -355,13 +354,8 @@ function isPlayerColliding() {
     for (let y = yMin; y <= yMax; y++) {
       for (let z = zMin; z <= zMax; z++) {
         if (isBlockAt(x, y, z)) {
-          // Compute the block's bounding box
-          const blockMin = new THREE.Vector3(x * CUBE_SIZE, y * CUBE_SIZE, z * CUBE_SIZE);
-          const blockMax = blockMin.clone().add(blockDim);
-          const blockBB = new THREE.Box3(blockMin, blockMax);
-
-          // Return if intersection
-          if (playerBB.intersectsBox(blockBB)) return blockBB;
+          const blockBB = playerCollidesBlock(x, y, z);
+          if (blockBB) return blockBB;
         }
       }
     }
@@ -369,6 +363,24 @@ function isPlayerColliding() {
 
   // No intersection
   return false;
+}
+
+/**
+ * Determine if the player collides with a block in that position,
+ * returnomg the block's bounding box if so,
+ * returning false if not
+ */
+function playerCollidesBlock(x, y, z) {
+  const blockDim = new THREE.Vector3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+  const playerBB = getPlayerBB();
+
+  // Compute the block's bounding box
+  const blockMin = new THREE.Vector3(x * CUBE_SIZE, y * CUBE_SIZE, z * CUBE_SIZE);
+  const blockMax = blockMin.clone().add(blockDim);
+  const blockBB = new THREE.Box3(blockMin, blockMax);
+
+  // Return if intersection
+  if (playerBB.intersectsBox(blockBB)) return blockBB;
 }
 
 /** Retrieve the player's bounding box */
@@ -468,7 +480,7 @@ function onMouseDown(event) {
 
     if (event.button === 0) {
       // Left click
-      removeBlock(pos[0], pos[1], pos[2]);
+      removeBlock(pos[0], pos[1], pos[2], false);
     } else if (event.button === 2) {
       // Right click: place position is translated by the normal of the face
       const face = first.face;
@@ -477,9 +489,10 @@ function onMouseDown(event) {
       const placeY = pos[1] + normal.y;
       const placeZ = pos[2] + normal.z;
 
-      placeBlock(currentBlock, placeX, placeY, placeZ);
       // Prevent placing inside player
-      if (isPlayerColliding()) removeBlock(placeX, placeY, placeZ);
+      if (!playerCollidesBlock(placeX, placeY, placeZ)) {
+        placeBlock(currentBlock, placeX, placeY, placeZ, false);
+      }
     }
   }
 }
@@ -587,7 +600,7 @@ function createBlockRangeHitboxes(x1, y1, z1, x2, y2, z2) {
 }
 
 /** Place a block with the id at the location */
-function placeBlock(id, x, y, z) {
+function placeBlock(id, x, y, z, generated = true) {
   let chunk = getBlockChunk(x, z);
 
   if (!chunk) {
@@ -596,48 +609,50 @@ function placeBlock(id, x, y, z) {
     generateChunk(cx, cz);
   }
 
-  placeBlockKnownChunk(id, x, y, z, chunk);
+  placeBlockKnownChunk(id, x, y, z, chunk, generated);
 }
 
 /** Remove a block at the specified location */
-function removeBlock(x, y, z) {
+function removeBlock(x, y, z, generated = true) {
   const chunk = getBlockChunk(x, z);
 
   // Stop if chunk doesn't exist
   if (!chunk) return;
 
-  removeBlockKnownChunk(x, y, z, chunk);
+  removeBlockKnownChunk(x, y, z, chunk, generated);
 }
 
 /** Place a block if it is in the chunk */
-function placeBlockInChunk(id, x, y, z, cx, cz) {
-  if (isBlockInChunk(x, z, cx, cz)) placeBlock(id, x, y, z);
+function placeBlockInChunk(id, x, y, z, cx, cz, generated = true) {
+  if (isBlockInChunk(x, z, cx, cz)) placeBlock(id, x, y, z, generated);
 }
 
 /** Remove a block if it is in the chunk */
-function removeBlockInChunk(x, y, z, cx, cz) {
-  if (isBlockInChunk(x, z, cx, cz)) removeBlock(x, y, z);
+function removeBlockInChunk(x, y, z, cx, cz, generated = true) {
+  if (isBlockInChunk(x, z, cx, cz)) removeBlock(x, y, z, generated);
 }
 
 /** Place a block where it is KNOWN to be in the chunk */
-function placeBlockKnownChunk(id, x, y, z, chunk) {
+function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
   const k = key(x, y, z);
 
   // Stop if already exists
   if (chunk.blocks[k]) return;
 
   chunk.blocks[k] = { id };
+  if (!generated) chunk.modified = true;
   chunk.updateMesh = true;
 }
 
 /** Remove a block where it is KNOWN to be in the chunk */
-function removeBlockKnownChunk(x, y, z, chunk) {
+function removeBlockKnownChunk(x, y, z, chunk, generated = true) {
   const k = key(x, y, z);
 
   // Stop if block doesn't exist
   if (!chunk.blocks[k]) return;
 
   delete chunk.blocks[k];
+  if (!generated) chunk.modified = true;
   chunk.updateMesh = true;
 }
 
@@ -690,7 +705,7 @@ function generateChunk(cx, cz) {
     return;
   } else {
     // Chunk does not exist, create new one
-    chunks[ck] = { blocks: {}, loaded: true };
+    chunks[ck] = { blocks: {}, loaded: true, modified: false };
   }
 
   const startX = cx * CHUNK_SIZE;
@@ -800,7 +815,7 @@ function generateChunkMesh(chunk) {
 
   // Helper function to add faces
   function addFaces(vertexData, poss, mat) {
-    if (poss.length == 0) return;
+    if (poss.length === 0) return;
 
     // Array of vertex data's pos repeated for every block pos translated by that block pos
     const newPositions = poss.flatMap(pos =>
