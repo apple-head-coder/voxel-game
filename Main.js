@@ -896,17 +896,21 @@ function generateSaveCode() {
   // Generate encoded chunks
   const chunksEncoded = {};
   for (const [ck, chunk] of Object.entries(chunks)) {
-    chunksEncoded[ck] = {
-      blocks: generateChunkSaveCode(ck, chunk),
-      generated: true,
-    };
+    if (chunk.modified) {
+      chunksEncoded[ck] = {
+        blocks: generateChunkSaveCode(ck, chunk),
+        modified: true,
+      };
+    }
   }
 
-  // Encode player data
+  // Encode data
   const pos = [position.x, position.y, position.z];
   const vel = [velocity.x, velocity.y, velocity.z];
   const rot = [rotation.x, rotation.y, rotation.z];
   const save = {
+    saveVersion: 1,
+    seed,
     player: { position: pos, velocity: vel, rotation: rot, canJump },
     chunks: chunksEncoded,
   };
@@ -917,8 +921,22 @@ function generateSaveCode() {
 /** Load a save code, replacing the current world */
 function loadSaveCode(save) {
   save = JSON.parse(save);
+  const saveVersion = save.saveVersion ? save.saveVersion : 0;
+  switch (saveVersion) {
+    case 0:
+      loadSaveCode0(save);
+      break;
+    case 1:
+      loadSaveCode1(save);
+      break;
+  }
+}
 
-  // Decode and update player data
+/** Load a version 1 save code */
+function loadSaveCode1(save) {
+  // Decode and update misc data
+  seed = save.seed;
+  initRandom();
   position = new THREE.Vector3(...save.player.position);
   velocity = new THREE.Vector3(...save.player.velocity);
   camera.quaternion.setFromEuler(new THREE.Euler(...save.player.rotation, "YXZ"));
@@ -936,6 +954,39 @@ function loadSaveCode(save) {
       blocks: decodeChunkSaveCode(ck, chunk.blocks),
       loaded: false,
       updateMesh: true,
+      modified: chunk.modified,
+    };
+  }
+
+  // Generate chunks if needed
+  generateChunksAroundPlayer();
+}
+
+/** Load a version 0 save code */
+function loadSaveCode0(save) {
+  // Decode and update misc data
+  seed = "0";
+  initRandom();
+  position = new THREE.Vector3(...save.player.position);
+  velocity = new THREE.Vector3(...save.player.velocity);
+  camera.quaternion.setFromEuler(new THREE.Euler(...save.player.rotation, "YXZ"));
+  canJump = save.player.canJump;
+
+  // Delete all old chunks
+  for (const ck of Object.keys(chunks)) {
+    scene.remove(chunks[ck].mesh);
+    delete chunks[ck];
+  }
+
+  // Decode and add new chunks
+  for (const [ck, chunk] of Object.entries(save.chunks)) {
+    // Ungenerated chunks no longer supported, don't add to be generated
+    if (!chunk.generated) continue;
+    chunks[ck] = {
+      blocks: decodeChunkSaveCode(ck, chunk.blocks),
+      loaded: false,
+      updateMesh: true,
+      modified: true,
     };
   }
 }
