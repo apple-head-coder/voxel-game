@@ -636,6 +636,9 @@ function removeBlockInChunk(x, y, z, cx, cz, generated = true) {
 function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
   const k = key(x, y, z);
 
+  // Prevent placing outside world height boundaries
+  if (y < MIN_HEIGHT || y > MAX_HEIGHT) return;
+
   // Stop if already exists
   if (chunk.blocks[k]) return;
 
