@@ -765,7 +765,10 @@ function reloadChunk(chunk) {
 }
 
 /** Generate, unload, and update chunks based on the player's position */
-function updateChunksAroundPlayer(updateOne) {
+function updateChunksAroundPlayer(generateOne) {
+  // Keeps track of whether world/mesh was generated, an expensive computation
+  let generated = false;
+
   // Calculate the player's current chunk
   const px = Math.floor(position.x / CUBE_SIZE);
   const pz = Math.floor(position.z / CUBE_SIZE);
@@ -773,22 +776,31 @@ function updateChunksAroundPlayer(updateOne) {
   const pcz = Math.floor(pz / CHUNK_SIZE);
 
   // Generate nearby chunks with radius in a square formation
-  outer: for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
+  for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
     for (let dz = -chunkRadius; dz <= chunkRadius; dz++) {
-      const generated = generateChunk(pcx + dx, pcz + dz);
-      if (updateOne && generated) break outer;
+      const generatedChunk = generateChunk(pcx + dx, pcz + dz);
+      if (generateOne && generatedChunk) {
+        generated = true;
+        break;
+      }
     }
+    if (generated) break;
   }
 
   // Update meshes
-  for (const chunk of Object.values(chunks)) {
-    if (chunk.updateMesh) {
-      scene.remove(chunk.mesh);
-      generateChunkMesh(chunk);
-      chunk.updateMesh = false;
-      if (chunk.loaded) scene.add(chunk.mesh);
+  if (!generated) {
+    for (const chunk of Object.values(chunks)) {
+      if (chunk.updateMesh) {
+        scene.remove(chunk.mesh);
+        generateChunkMesh(chunk);
+        chunk.updateMesh = false;
+        if (chunk.loaded) scene.add(chunk.mesh);
 
-      if (updateOne) break;
+        if (generateOne) {
+          generated = true;
+          break;
+        }
+      }
     }
   }
 
