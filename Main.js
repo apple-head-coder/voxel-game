@@ -41,7 +41,7 @@ let raycaster, mouse;
 
 // World & world gen
 // store chunks by key
-// { "cx,cz": { blocks: [{ id }] }, mesh, updateMesh, loaded, modified } }
+// { "cx,cz": { blocks: [{ id }], mesh, updateMesh, loaded, modified } }
 const chunks = {};
 const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false });
 const textureLoader = new THREE.TextureLoader();
@@ -70,9 +70,23 @@ let fps;
 
 /*************** UTILITY ***************/
 
+/** Calculate the positive modulus */
+function mod(n, m) {
+  return ((n % m) + m) % m;
+}
+
 /** Get the key of a block from xyz coords */
 function key(x, y, z) {
-  return `${x},${y},${z}`;
+  return (
+    (y - MIN_HEIGHT) * CHUNK_SIZE * CHUNK_SIZE +
+    mod(x, CHUNK_SIZE) * CHUNK_SIZE +
+    mod(z, CHUNK_SIZE)
+  );
+}
+
+/** Get the key of a blocks from chunk local xyz coords */
+function lkey(x, y, z) {
+  return (y - MIN_HEIGHT) * CHUNK_SIZE * CHUNK_SIZE + x * CHUNK_SIZE + z;
 }
 
 /** Get the key of a chunk from xz coords */
@@ -80,8 +94,16 @@ function chunkKey(cx, cz) {
   return `${cx},${cz}`;
 }
 
-/** Convert a block or chunk key to array */
+/** Convert a block key to array of local coords */
 function keyToArray(k) {
+  const x = Math.floor(k / CHUNK_SIZE) % CHUNK_SIZE;
+  const y = Math.floor(k / (CHUNK_SIZE * CHUNK_SIZE)) + MIN_HEIGHT;
+  const z = k % CHUNK_SIZE;
+  return [x, y, z];
+}
+
+/** Convert a chunk key to array */
+function chunkKeyToArray(k) {
   return k.split(",").map(n => parseInt(n));
 }
 
@@ -335,7 +357,8 @@ function correctCollision(moveDir, blockBB) {
   }
 }
 
-/** Checks if the player is colliding with the world,
+/**
+ * Checks if the player is colliding with the world,
  * returning the colliding block's bounding box if so,
  * returning false if not
  */
@@ -535,6 +558,18 @@ function onExportSave() {
 
 /*************** WORLD & WORLD GEN ***************/
 
+/** Get local xz coords from world xz coords */
+function localCoords(x, z) {
+  return [mod(x, CHUNK_SIZE), mod(z, CHUNK_SIZE)];
+}
+
+/** Get the chunk coords from a block's xz coordinates */
+function blockChunkCoords(x, z) {
+  const cx = Math.floor(x / CHUNK_SIZE);
+  const cz = Math.floor(z / CHUNK_SIZE);
+  return [cx, cz];
+}
+
 /** Get the chunk key from a block's xz coordinates */
 function blockChunkKey(x, z) {
   const cx = Math.floor(x / CHUNK_SIZE);
@@ -545,7 +580,9 @@ function blockChunkKey(x, z) {
 
 /** Get the chunk from a block's xz coordinates */
 function getBlockChunk(x, z) {
-  const ck = blockChunkKey(x, z);
+  const cx = Math.floor(x / CHUNK_SIZE);
+  const cz = Math.floor(z / CHUNK_SIZE);
+  const ck = chunkKey(cx, cz);
   return chunks[ck];
 }
 
@@ -553,6 +590,11 @@ function getBlockChunk(x, z) {
 function isBlockAt(x, y, z) {
   const chunk = getBlockChunk(x, z);
   return !!chunk.blocks[key(x, y, z)];
+}
+
+/** Determines if there is a block at the local coords */
+function isBlockAtLocal(x, y, z, chunk) {
+  return !!chunk.blocks[lkey(x, y, z)];
 }
 
 /** Determines if a block is in the chunk */
@@ -566,8 +608,10 @@ function isBlockInChunk(x, z, cx, cz) {
 
 /** Find the y of the top block */
 function findTopBlockY(x, z) {
+  const [lx, lz] = localCoords(x, z);
+  const chunk = getBlockChunk(x, z);
   for (let y = MAX_HEIGHT; y >= MIN_HEIGHT; y--) {
-    if (isBlockAt(x, y, z)) return y;
+    if (isBlockAtLocal(lx, y, lz, chunk)) return y;
   }
   return null;
 }
@@ -605,11 +649,14 @@ function placeBlock(id, x, y, z, generated = true) {
 
   if (!chunk) {
     // Chunk doesn't exist - generate it
-    const [cx, cz] = keyToArray(blockChunkKey(x, z));
+    const [cx, cz] = blockChunkCoords(x, z);
     generateChunk(cx, cz);
+    chunk = getBlockChunk(x, z);
   }
 
-  placeBlockKnownChunk(id, x, y, z, chunk, generated);
+  const [lx, lz] = localCoords(x, z);
+
+  placeBlockLocal(id, lx, y, lz, chunk, generated);
 }
 
 /** Remove a block at the specified location */
@@ -619,7 +666,9 @@ function removeBlock(x, y, z, generated = true) {
   // Stop if chunk doesn't exist
   if (!chunk) return;
 
-  removeBlockKnownChunk(x, y, z, chunk, generated);
+  const [lx, lz] = localCoords(x, z);
+
+  removeBlockLocal(lx, y, lz, chunk, generated);
 }
 
 /** Place a block if it is in the chunk */
@@ -632,9 +681,9 @@ function removeBlockInChunk(x, y, z, cx, cz, generated = true) {
   if (isBlockInChunk(x, z, cx, cz)) removeBlock(x, y, z, generated);
 }
 
-/** Place a block where it is KNOWN to be in the chunk */
-function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
-  const k = key(x, y, z);
+/** Place a block with local coordinates in a chunk */
+function placeBlockLocal(id, x, y, z, chunk, generated = true) {
+  const k = lkey(x, y, z);
 
   // Prevent placing outside world height boundaries
   if (y < MIN_HEIGHT || y > MAX_HEIGHT) return;
@@ -647,8 +696,8 @@ function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
   chunk.updateMesh = true;
 }
 
-/** Remove a block where it is KNOWN to be in the chunk */
-function removeBlockKnownChunk(x, y, z, chunk, generated = true) {
+/** Remove a block with local coordinates in a chunk */
+function removeBlockLocal(x, y, z, chunk, generated = true) {
   const k = key(x, y, z);
 
   // Stop if block doesn't exist
@@ -711,8 +760,10 @@ function generateChunk(cx, cz) {
     return false;
   } else {
     // Chunk does not exist, create new one
-    chunks[ck] = { blocks: {}, loaded: true, modified: false };
+    chunks[ck] = { blocks: [], loaded: true, modified: false };
   }
+
+  const chunk = chunks[ck];
 
   const startX = cx * CHUNK_SIZE;
   const startZ = cz * CHUNK_SIZE;
@@ -729,7 +780,7 @@ function generateChunk(cx, cz) {
       for (let y = 0; y < height; y++) {
         const top = y === height - 1;
         const type = top ? BLOCK_ID.grass : y >= height - 3 ? BLOCK_ID.dirt : BLOCK_ID.stone;
-        placeBlock(type, wx, y, wz);
+        placeBlockLocal(type, x, y, z, chunk);
       }
     }
   }
@@ -743,8 +794,10 @@ function generateChunk(cx, cz) {
       const lrng = locationRng(wx, wz);
 
       // Place tree
-      const height = getTerrainHeight(wx, wz);
-      if (lrng() < TREE_CHANCE_PER_BLOCK) generateTree(wx, height, wz, cx, cz, lrng);
+      if (lrng() < TREE_CHANCE_PER_BLOCK) {
+        const height = getTerrainHeight(wx, wz);
+        generateTree(wx, height, wz, cx, cz, lrng);
+      }
     }
   }
 
@@ -792,10 +845,10 @@ function updateChunksAroundPlayer(generateOne) {
 
   // Update meshes
   if (!generated) {
-    for (const chunk of Object.values(chunks)) {
+    for (const [ck, chunk] of Object.entries(chunks)) {
       if (chunk.updateMesh) {
         scene.remove(chunk.mesh);
-        generateChunkMesh(chunk);
+        generateChunkMesh(ck);
         chunk.updateMesh = false;
         if (chunk.loaded) scene.add(chunk.mesh);
 
@@ -809,7 +862,7 @@ function updateChunksAroundPlayer(generateOne) {
 
   // Unload chunks
   for (const [ck, chunk] of Object.entries(chunks)) {
-    const [cx, cz] = keyToArray(ck);
+    const [cx, cz] = chunkKeyToArray(ck);
     // Check if distance is too far
     if (Math.abs(cx - pcx) > chunkRadius || Math.abs(cz - pcz) > chunkRadius) {
       unloadChunk(chunk);
@@ -818,14 +871,19 @@ function updateChunksAroundPlayer(generateOne) {
 }
 
 /** Generate a chunk's mesh */
-function generateChunkMesh(chunk) {
+function generateChunkMesh(ck) {
+  const chunk = chunks[ck];
+  const [cx, cz] = chunkKeyToArray(ck);
+  const cwx = cx * CHUNK_SIZE;
+  const cwz = cz * CHUNK_SIZE;
+
   const positions = []; // vertex position data
   const normals = []; // vertex normal data
   const indices = []; // vertex index data
   const uvs = []; // vertex texture coordinate data
   const materials = []; // material data
   const facesByID = {}; // which faces to construct by block and direction:
-  //                       { block id: [direction: [block coords: [x, y, z]]] }
+  //                       { block id: [direction: [block coords: x, y, z, ...]] }
   const geometry = new THREE.BufferGeometry(); // geometry to be constructed with faces culled
 
   // prettier-ignore
@@ -839,44 +897,65 @@ function generateChunkMesh(chunk) {
     zp: { pos: [[0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]], normal: [ 0,  0,  1], uv: [[0, 0], [1, 0], [0, 1], [1, 1]], idx: [0, 1, 2, 1, 3, 2] },
   };
 
+  const vertsPerFace = faces.xn.pos.length;
+  const idxsPerFace = faces.xn.idx.length;
+
+  // Keep track of how many vertices have been added
+  let vertexCount = 0;
+
   // Helper function to add faces
-  function addFaces(vertexData, poss, mat) {
-    if (poss.length === 0) return;
-
-    // Array of vertex data's pos repeated for every block pos translated by that block pos
-    const newPositions = poss.flatMap(pos =>
-      vertexData.pos.map(vertex => [vertex[0] + pos[0], vertex[1] + pos[1], vertex[2] + pos[2]])
-    );
-
-    // Array filled with vertex data's normal for every vertex pos for every block
-    const newNormals = Array(vertexData.pos.length * poss.length).fill(vertexData.normal);
-
-    // Array of vertex data's indices repeated for every block
-    // shifted by the corresponding index in position
-    const newIndices = Array(poss.length)
-      .fill(null)
-      .flatMap((_, i) =>
-        vertexData.idx.map(idx => idx + positions.length + i * vertexData.pos.length)
-      );
-
-    // Array of vertex data's uv repeated for every block
-    const newUVs = Array(poss.length).fill(vertexData.uv).flat();
+  function addFaces(vertexData, blockCoords, mat) {
+    if (!blockCoords.length) return;
 
     // Add group so those new vertices have the right material
-    geometry.addGroup(indices.length, vertexData.idx.length * poss.length, materials.length);
-
+    geometry.addGroup(indices.length, idxsPerFace * (blockCoords.length / 3), materials.length);
     materials.push(mat);
 
-    // Add new vertices
-    positions.push(...newPositions);
-    normals.push(...newNormals);
-    uvs.push(...newUVs);
-    indices.push(...newIndices);
+    for (let c = 0; c < blockCoords.length; c += 3) {
+      // Append vertex positions, normals, and uvs for each vertex
+      for (let i = 0; i < vertsPerFace; i++) {
+        const vert = vertexData.pos[i];
+        positions.push(
+          vert[0] + blockCoords[c + 0],
+          vert[1] + blockCoords[c + 1],
+          vert[2] + blockCoords[c + 2]
+        );
+
+        normals.push(...vertexData.normal);
+
+        uvs.push(...vertexData.uv[i]);
+      }
+
+      // Append indices for this face
+      for (let i = 0; i < idxsPerFace; i++) {
+        indices.push(vertexCount + vertexData.idx[i]);
+      }
+
+      vertexCount += vertsPerFace;
+    }
   }
 
   // Calculate all faces we need
-  for (const [k, block] of Object.entries(chunk.blocks)) {
-    const [x, y, z] = keyToArray(k);
+
+  // Offsets for adjacent blocks
+  const oxn = -CHUNK_SIZE;
+  const oxp = CHUNK_SIZE;
+  const oyn = -CHUNK_SIZE * CHUNK_SIZE;
+  const oyp = CHUNK_SIZE * CHUNK_SIZE;
+  const ozn = -1;
+  const ozp = 1;
+
+  // Limits for checking adjacent blocks to prevent checking the next row
+  const lxn = cwx;
+  const lxp = cwx + CHUNK_SIZE - 1;
+  const lzn = cwz;
+  const lzp = cwz + CHUNK_SIZE - 1;
+
+  chunk.blocks.forEach((block, k) => {
+    // Calculate world coords
+    let [x, y, z] = keyToArray(k);
+    x += cwx;
+    z += cwz;
 
     // Record new block ids
     if (!facesByID[block.id]) {
@@ -884,13 +963,13 @@ function generateChunkMesh(chunk) {
     }
 
     // Check surrondings and add faces only if needed
-    if (!chunk.blocks[key(x - 1, y, z)]) facesByID[block.id][5].push([x, y, z]);
-    if (!chunk.blocks[key(x + 1, y, z)]) facesByID[block.id][3].push([x, y, z]);
-    if (!chunk.blocks[key(x, y - 1, z)]) facesByID[block.id][1].push([x, y, z]);
-    if (!chunk.blocks[key(x, y + 1, z)]) facesByID[block.id][0].push([x, y, z]);
-    if (!chunk.blocks[key(x, y, z - 1)]) facesByID[block.id][2].push([x, y, z]);
-    if (!chunk.blocks[key(x, y, z + 1)]) facesByID[block.id][4].push([x, y, z]);
-  }
+    if (!(chunk.blocks[k + oxn] && x > lxn)) facesByID[block.id][5].push(x, y, z);
+    if (!(chunk.blocks[k + oxp] && x < lxp)) facesByID[block.id][3].push(x, y, z);
+    if (!chunk.blocks[k + oyn]) facesByID[block.id][1].push(x, y, z);
+    if (!chunk.blocks[k + oyp]) facesByID[block.id][0].push(x, y, z);
+    if (!(chunk.blocks[k + ozn] && z > lzn)) facesByID[block.id][2].push(x, y, z);
+    if (!(chunk.blocks[k + ozp] && z < lzp)) facesByID[block.id][4].push(x, y, z);
+  });
 
   // Construct the faces calculated above
   for (const [blockID, blockFaces] of Object.entries(facesByID)) {
@@ -903,9 +982,9 @@ function generateChunkMesh(chunk) {
   }
 
   // Add constructed data to geometry
-  const positionsArray = new Float32Array(positions.flat());
-  const normalsArray = new Float32Array(normals.flat());
-  const uvsArray = new Float32Array(uvs.flat());
+  const positionsArray = new Float32Array(positions);
+  const normalsArray = new Float32Array(normals);
+  const uvsArray = new Float32Array(uvs);
   geometry.setAttribute("position", new THREE.BufferAttribute(positionsArray, 3));
   geometry.setAttribute("normal", new THREE.BufferAttribute(normalsArray, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(uvsArray, 2));
@@ -924,7 +1003,7 @@ function generateSaveCode() {
   for (const [ck, chunk] of Object.entries(chunks)) {
     if (chunk.modified) {
       chunksEncoded[ck] = {
-        blocks: generateChunkSaveCode(ck, chunk),
+        blocks: generateChunkSaveCode(chunk),
         modified: true,
       };
     }
@@ -977,7 +1056,7 @@ function loadSaveCode1(save) {
   // Decode and add new chunks
   for (const [ck, chunk] of Object.entries(save.chunks)) {
     chunks[ck] = {
-      blocks: decodeChunkSaveCode(ck, chunk.blocks),
+      blocks: decodeChunkSaveCode(chunk.blocks),
       loaded: false,
       updateMesh: true,
       modified: chunk.modified,
@@ -1009,7 +1088,7 @@ function loadSaveCode0(save) {
     // Ungenerated chunks no longer supported, don't add to be generated
     if (!chunk.generated) continue;
     chunks[ck] = {
-      blocks: decodeChunkSaveCode(ck, chunk.blocks),
+      blocks: decodeChunkSaveCode(chunk.blocks),
       loaded: false,
       updateMesh: true,
       modified: true,
@@ -1018,9 +1097,7 @@ function loadSaveCode0(save) {
 }
 
 /** Generate a save code for a single chunk */
-function generateChunkSaveCode(ck, chunk) {
-  const [cx, cz] = keyToArray(ck);
-
+function generateChunkSaveCode(chunk) {
   let code = "";
   let lastBlockID = null;
   let repeatCount = 0;
@@ -1037,10 +1114,8 @@ function generateChunkSaveCode(ck, chunk) {
   for (let y = MIN_HEIGHT; y <= MAX_HEIGHT; y++) {
     for (let x = 0; x < CHUNK_SIZE; x++) {
       for (let z = 0; z < CHUNK_SIZE; z++) {
-        // Get block coordinates
-        const wx = cx * CHUNK_SIZE + x;
-        const wz = cz * CHUNK_SIZE + z;
-        const k = key(wx, y, wz);
+        // Get block key
+        const k = lkey(x, y, z);
 
         // Determine block id
         let id;
@@ -1064,28 +1139,14 @@ function generateChunkSaveCode(ck, chunk) {
   }
 
   // Add the last repeat group to the code
-  addToCode();
+  if (lastBlockID !== 4095) addToCode();
 
   return code;
 }
 
 /** Decodes a save code for a chunk and returns the blocks object for that chunk */
-function decodeChunkSaveCode(ck, code) {
-  const [cx, cz] = keyToArray(ck);
-
-  // Helper function to determine the block key from the index in the chunk's blocks
-  function idxToKey(idx) {
-    const x = Math.floor(idx / CHUNK_SIZE) % CHUNK_SIZE;
-    const y = Math.floor(idx / (CHUNK_SIZE * CHUNK_SIZE)) + MIN_HEIGHT;
-    const z = idx % CHUNK_SIZE;
-
-    const wx = CHUNK_SIZE * cx + x;
-    const wz = CHUNK_SIZE * cz + z;
-    return key(wx, y, wz);
-  }
-
-  const blocks = {};
-  let idx = 0;
+function decodeChunkSaveCode(code) {
+  const blocks = [];
 
   // Loop through the code 1 repeat block (4 chars) at a time
   for (let i = 0; i < code.length; i += 4) {
@@ -1094,10 +1155,8 @@ function decodeChunkSaveCode(ck, code) {
     const repeat = (base64num(code[i + 2]) << 6) | base64num(code[i + 3]);
 
     // Add blocks according to the repeat
-    for (let j = 0; j < repeat; j++) {
-      const k = idxToKey(idx++);
-      if (blockID < 4095) blocks[k] = { id: blockID };
-    }
+    if (blockID === 4095) blocks.length += repeat;
+    else blocks.push(...Array.from({ length: repeat }, () => ({ id: blockID })));
   }
 
   return blocks;
