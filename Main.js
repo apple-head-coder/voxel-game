@@ -557,6 +557,7 @@ function onExportSave() {
 }
 
 /*************** WORLD & WORLD GEN ***************/
+
 /** Get local xz coords from world xz coords */
 function localCoords(x, z) {
   return [mod(x, CHUNK_SIZE), mod(z, CHUNK_SIZE)];
@@ -653,7 +654,9 @@ function placeBlock(id, x, y, z, generated = true) {
     chunk = getBlockChunk(x, z);
   }
 
-  placeBlockKnownChunk(id, x, y, z, chunk, generated);
+  const [lx, lz] = localCoords(x, z);
+
+  placeBlockLocal(id, lx, y, lz, chunk, generated);
 }
 
 /** Remove a block at the specified location */
@@ -663,7 +666,9 @@ function removeBlock(x, y, z, generated = true) {
   // Stop if chunk doesn't exist
   if (!chunk) return;
 
-  removeBlockKnownChunk(x, y, z, chunk, generated);
+  const [lx, lz] = localCoords(x, z);
+
+  removeBlockLocal(lx, y, lz, chunk, generated);
 }
 
 /** Place a block if it is in the chunk */
@@ -676,9 +681,9 @@ function removeBlockInChunk(x, y, z, cx, cz, generated = true) {
   if (isBlockInChunk(x, z, cx, cz)) removeBlock(x, y, z, generated);
 }
 
-/** Place a block where it is KNOWN to be in the chunk */
-function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
-  const k = key(x, y, z);
+/** Place a block with local coordinates in a chunk */
+function placeBlockLocal(id, x, y, z, chunk, generated = true) {
+  const k = lkey(x, y, z);
 
   // Stop if already exists
   if (chunk.blocks[k]) return;
@@ -688,8 +693,8 @@ function placeBlockKnownChunk(id, x, y, z, chunk, generated = true) {
   chunk.updateMesh = true;
 }
 
-/** Remove a block where it is KNOWN to be in the chunk */
-function removeBlockKnownChunk(x, y, z, chunk, generated = true) {
+/** Remove a block with local coordinates in a chunk */
+function removeBlockLocal(x, y, z, chunk, generated = true) {
   const k = key(x, y, z);
 
   // Stop if block doesn't exist
@@ -769,7 +774,7 @@ function generateChunk(cx, cz) {
       for (let y = 0; y < height; y++) {
         const top = y === height - 1;
         const type = top ? BLOCK_ID.grass : y >= height - 3 ? BLOCK_ID.dirt : BLOCK_ID.stone;
-        placeBlockKnownChunk(type, wx, y, wz, chunk);
+        placeBlockLocal(type, x, y, z, chunk);
       }
     }
   }
@@ -783,8 +788,10 @@ function generateChunk(cx, cz) {
       const lrng = locationRng(wx, wz);
 
       // Place tree
-      const height = getTerrainHeight(wx, wz);
-      if (lrng() < TREE_CHANCE_PER_BLOCK) generateTree(wx, height, wz, cx, cz, lrng);
+      if (lrng() < TREE_CHANCE_PER_BLOCK) {
+        const height = getTerrainHeight(wx, wz);
+        generateTree(wx, height, wz, cx, cz, lrng);
+      }
     }
   }
 }
@@ -920,9 +927,9 @@ function generateChunkMesh(ck) {
 
   chunk.blocks.forEach((block, k) => {
     // Calculate world coords
-    const x = (Math.floor(k / CHUNK_SIZE) % CHUNK_SIZE) + cwx;
-    const y = Math.floor(k / (CHUNK_SIZE * CHUNK_SIZE)) + MIN_HEIGHT;
-    const z = (k % CHUNK_SIZE) + cwz;
+    let [x, y, z] = keyToArray(k);
+    x += cwx;
+    z += cwz;
 
     // Record new block ids
     if (!facesByID[block.id]) {
