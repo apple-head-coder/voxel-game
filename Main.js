@@ -15,9 +15,9 @@ const BLOCK_ID = {}; // { name: id }
 const CUBE_SIZE = 1;
 
 const MIN_HEIGHT = 0;
-const MAX_HEIGHT = 64;
+const MAX_HEIGHT = 128;
 const CHUNK_SIZE = 16;
-const TERRAIN_HEIGHT = 30; // this will affect spawn height as well
+const TERRAIN_HEIGHT = 64; // this will affect spawn height as well
 const TERRAIN_INTENSITIES = [24, 8, 4, 2, 1];
 const TERRAIN_RESOLUTIONS = [0.003, 0.01, 0.02, 0.05, 0.1];
 const TREE_CANOPY_RADIUS = 3;
