@@ -37,7 +37,7 @@ const EPSILON = 1e-6;
 
 // 3d rendering stuff
 let scene, camera, renderer, controls;
-let raycaster, mouse;
+let raycaster;
 
 // World & world gen
 // store chunks by key
@@ -166,7 +166,6 @@ function init() {
 
   // Raycasting
   raycaster = new THREE.Raycaster();
-  mouse = new THREE.Vector2();
 
   // Controls
   controls = new THREE.PointerLockControls(camera, document.body);
@@ -493,7 +492,7 @@ function onMouseDown(event) {
   );
 
   // Raycast
-  raycaster.setFromCamera(mouse, camera);
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   raycaster.far = PLAYER_REACH; // limit distance
   const intersections = raycaster.intersectObjects(blockHitboxes);
 
@@ -518,6 +517,9 @@ function onMouseDown(event) {
       }
     }
   }
+
+  // Dispose hitbox geometries
+  for (const hitbox of blockHitboxes) hitbox.geometry.dispose();
 }
 
 /** Callback for clicking save button */
@@ -989,6 +991,9 @@ function generateChunkMesh(ck) {
   geometry.setAttribute("normal", new THREE.BufferAttribute(normalsArray, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(uvsArray, 2));
   geometry.setIndex(indices);
+
+  // Dispose old geometry
+  chunk.mesh?.geometry.dispose();
 
   // Create final mesh
   chunk.mesh = new THREE.Mesh(geometry, materials);
