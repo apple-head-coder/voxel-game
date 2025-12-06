@@ -63,7 +63,7 @@ const moveControls = {
   crouch: false,
   sprint: false,
 };
-let position = new THREE.Vector3(0, TERRAIN_HEIGHT + 1, 0);
+let position;
 let rotation = new THREE.Euler();
 let velocity = new THREE.Vector3();
 let speed = PLAYER_SPEED;
@@ -73,7 +73,13 @@ let camOffset = CAM_OFFSET.clone();
 let sprintTapLastTime = 0;
 let isDoubleTapSprinting = false;
 
+// UI
+const mainMenu = document.getElementById("main-menu");
+const pauseMenu = document.getElementById("pause-menu");
+const gameElem = document.getElementById("game");
+
 // Misc
+let playing = false;
 let lastFrameTime;
 let fps;
 
@@ -162,7 +168,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  document.body.appendChild(renderer.domElement);
+  gameElem.appendChild(renderer.domElement);
 
   // Lights
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
@@ -180,10 +186,12 @@ function init() {
   controls = new THREE.PointerLockControls(camera, document.body);
   scene.add(controls.getObject());
 
+  // UI
+  setupUI();
+
   // Generate stuff
   generateBlockIDs();
   generateBlockMaterials();
-  initRandom();
 
   // Event listeners
   window.addEventListener("resize", withErrorHandling(onWindowResize), false);
@@ -191,6 +199,9 @@ function init() {
   document.addEventListener("mousedown", withErrorHandling(onMouseDown), false);
   document.addEventListener("keydown", withErrorHandling(onKeyDown), false);
   document.addEventListener("keyup", withErrorHandling(onKeyUp), false);
+
+  // Frame loop
+  animate();
 }
 
 /** Populate the `BLOCK_ID` object with the ids of blocks from their names */
@@ -252,6 +263,9 @@ function generateNoiseFunction(noiseSeed) {
 
 /** Function called every frame for processing and rendering */
 function animate(time) {
+  requestAnimationFrame(withErrorHandling(animate));
+  if (!playing) return;
+
   // Calculate delta time
   let deltaTime;
   if (lastFrameTime === undefined) {
@@ -270,7 +284,6 @@ function animate(time) {
 
   // Render
   renderer.render(scene, camera);
-  requestAnimationFrame(animate);
 }
 
 /*************** PLAYER MOVEMENT ***************/
@@ -574,11 +587,17 @@ function onMouseDown(event) {
   for (const hitbox of blockHitboxes) hitbox.geometry.dispose();
 }
 
+/** Callback for clicking create button */
+function onCreate() {
+  getUserSeed();
+  mainMenu.style.display = "none";
+  createWorld();
+}
+
 /** Callback for clicking save button */
 function onSave() {
   const save = generateSaveCode();
   localStorage.setItem("save", save);
-  alert("Saved!");
 }
 
 /** Callback for clicking load button */
@@ -588,7 +607,9 @@ function onLoadSave() {
     alert("You do not have a save");
     return;
   }
-  loadSaveCode(save);
+
+  mainMenu.style.display = "none";
+  loadWorld(save);
 }
 
 /** Callback for clicking clear button */
@@ -599,7 +620,10 @@ function onClearSave() {
 /** Callback for clicking import button */
 function onImportSave() {
   const save = prompt("Enter your save here:");
-  if (save) loadSaveCode(save);
+  if (save) {
+    mainMenu.style.display = "none";
+    loadWorld(save);
+  }
 }
 
 /** Callback for clicking export button */
@@ -608,6 +632,37 @@ function onExportSave() {
   navigator.clipboard.writeText(save).then(() => {
     alert("Save copied to clipboard!");
   });
+}
+
+/** Callback for pointer lock change */
+function onPointerLockChange() {
+  if (controls.isLocked) {
+    // Unpause game
+    pauseMenu.style.display = "none";
+  } else {
+    // Pause game
+    pauseMenu.style.display = "block";
+
+    // Release all keys
+    for (const k of Object.keys(moveControls)) moveControls[k] = false;
+  }
+}
+
+/** Callback for clicking resume button */
+function onResume() {
+  controls.lock();
+}
+
+/** Callback for clicking settings button */
+function onOpenSettings() {
+  alert("no settings yet :)");
+}
+
+/** Callback for clicking quit button */
+function onQuitWorld() {
+  destroyWorld();
+  pauseMenu.style.display = "none";
+  mainMenu.style.display = "block";
 }
 
 /*************** WORLD & WORLD GEN ***************/
@@ -668,6 +723,41 @@ function findTopBlockY(x, z) {
     if (isBlockAtLocal(lx, y, lz, chunk)) return y;
   }
   return null;
+}
+
+/** Create a new world */
+function createWorld() {
+  initWorld();
+  position = new THREE.Vector3(0, TERRAIN_HEIGHT + 1, 0);
+  controls.getObject().rotation.set(0, 0, 0);
+  updateChunksAroundPlayer(false);
+  controls.lock();
+}
+
+/** Load a world */
+function loadWorld(saveCode) {
+  loadSaveCode(saveCode);
+  initWorld();
+  updateChunksAroundPlayer(false);
+  controls.lock();
+}
+
+/** Initialize the world */
+function initWorld() {
+  initRandom();
+  playing = true;
+}
+
+/** Destroy the world */
+function destroyWorld() {
+  for (const ck of Object.keys(chunks)) {
+    if (chunks[ck].mesh) {
+      scene.remove(chunks[ck].mesh);
+      chunks[ck].mesh.geometry.dispose();
+    }
+    delete chunks[ck];
+  }
+  playing = false;
 }
 
 /** Create a hitbox for a block */
@@ -1223,62 +1313,41 @@ function decodeChunkSaveCode(code) {
 
 /** Setup all UI */
 function setupUI() {
-  setupPalette();
-  setupStartButton();
-  setupSaveButtons();
+  setupMainMenu();
+  setupPauseMenu();
 }
 
-/** Setup the block palette */
-function setupPalette() {
-  const palette = document.getElementById("blockPalette");
+/** Setup the main menu */
+function setupMainMenu() {
+  const createButton = document.getElementById("main-create");
+  const loadButton = document.getElementById("main-load");
+  const importButton = document.getElementById("main-import");
+  const settingsButton = document.getElementById("main-settings");
 
-  BLOCK_TYPES.forEach((type, index) => {
-    const btn = document.createElement("button");
-    btn.textContent = type.name;
-    btn.onclick = () => {
-      currentBlock = index;
-      document.getElementById("currentBlock").textContent = type.name;
-    };
-    palette.appendChild(btn);
-  });
-
-  document.getElementById("currentBlock").textContent = BLOCK_TYPES[currentBlock].name;
+  createButton.onclick = withErrorHandling(onCreate);
+  loadButton.onclick = withErrorHandling(onLoadSave);
+  importButton.onclick = withErrorHandling(onImportSave);
+  settingsButton.onclick = withErrorHandling(onOpenSettings);
 }
 
-/** Setup the pointer lock start button */
-function setupStartButton() {
-  const start = document.getElementById("startButton");
+/** Setup the pause menu */
+function setupPauseMenu() {
+  pauseMenu.style.display = "none";
 
-  // Lock on click
-  start.addEventListener("click", () => {
-    controls.lock();
-  });
+  // Pause on exit pointer lock
+  document.addEventListener("pointerlockchange", withErrorHandling(onPointerLockChange));
 
-  // Appear/disappear when pointer lock changes
-  document.addEventListener("pointerlockchange", () => {
-    if (controls.isLocked) {
-      start.style.display = "block";
-      // Release all keys
-      for (const k of Object.keys(moveControls)) moveControls[k] = false;
-    } else {
-      start.style.display = "none";
-    }
-  });
-}
+  const resumeButton = document.getElementById("pause-resume");
+  const saveButton = document.getElementById("pause-save");
+  const exportButton = document.getElementById("pause-export");
+  const settingsButton = document.getElementById("pause-settings");
+  const quitButton = document.getElementById("pause-quit");
 
-/** Setup all of the save related buttons */
-function setupSaveButtons() {
-  const save = document.getElementById("saveBtn");
-  const load = document.getElementById("loadBtn");
-  const clear = document.getElementById("clearBtn");
-  const importBtn = document.getElementById("importBtn");
-  const exportBtn = document.getElementById("exportBtn");
-
-  save.onclick = withErrorHandling(onSave);
-  load.onclick = withErrorHandling(onLoadSave);
-  clear.onclick = withErrorHandling(onClearSave);
-  importBtn.onclick = withErrorHandling(onImportSave);
-  exportBtn.onclick = withErrorHandling(onExportSave);
+  resumeButton.onclick = withErrorHandling(onResume);
+  saveButton.onclick = withErrorHandling(onSave);
+  exportButton.onclick = withErrorHandling(onExportSave);
+  settingsButton.onclick = withErrorHandling(onOpenSettings);
+  quitButton.onclick = withErrorHandling(onQuitWorld);
 }
 
 /** Update the debug text */
@@ -1322,7 +1391,6 @@ function withErrorHandling(func) {
     try {
       return func.apply(this, args);
     } catch (error) {
-      console.log("error caught");
       prompt(
         `An error was encountered. If you are a player, please report this:
 
@@ -1337,10 +1405,5 @@ Copy/paste from here:`,
 }
 
 withErrorHandling(() => {
-  getUserChunkRadius();
-  getUserSeed();
-  setupUI();
   init();
-  updateChunksAroundPlayer(false);
-  animate();
 })();
